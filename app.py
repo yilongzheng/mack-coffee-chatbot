@@ -16,6 +16,21 @@ def secret(name):
     except Exception:
         return ""
 
+def balanced_variant(session_id):
+    url, key = secret("SUPABASE_URL"), secret("SUPABASE_PUBLISHABLE_KEY")
+    if url and key:
+        try:
+            from supabase import create_client
+            selected = create_client(url, key).rpc(
+                "assign_chatbot_variant", {"p_session_id": session_id}
+            ).execute().data
+            if selected in ("A", "B"):
+                return selected
+        except Exception:
+            st.warning("Balanced A/B assignment is unavailable. Check that balance_variants.sql ran successfully.")
+    # Local mode still uses random assignment; small samples may be imbalanced.
+    return "A" if uuid.uuid4().int % 2 == 0 else "B"
+
 def choose(message):
     """Select a plausible item from any row order in the classroom demo."""
     q = message.lower()
@@ -98,6 +113,7 @@ st.title("☕ Mack Coffee Assistant")
 st.caption("Classroom demonstration: no real orders are placed. Please do not enter personal information.")
 st.checkbox("I agree to have my messages and the bot's replies recorded for a classroom research exercise. Please do not enter names, contact details, or other personal information.", key="consent")
 if st.session_state.consent and not st.session_state.started:
+    st.session_state.variant = balanced_variant(st.session_state.session_id)
     st.session_state.started = True
     event("session_start")
 if not st.session_state.consent:
