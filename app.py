@@ -46,11 +46,14 @@ def answer(message):
     prompt = ("You are a concise, friendly Mack Coffee sales assistant. Reply in the customer's language. "
               "Recommend only listed products and exact listed prices; do not invent discounts, dietary guarantees or stock. "
               "If preferences are unclear, ask one short clarifying question. No more than three questions before a recommendation. "
-              "Offer a gentle menu CTA. Catalog:\n" + catalog + "\nRecent chat:\n" +
+              "For a menu CTA, tell the customer to open Sample menu above or click View full menu below. "
+              "Never invent a URL or write a placeholder such as [link to menu]. Catalog:\n" + catalog + "\nRecent chat:\n" +
               "\n".join(f"{m['role']}: {m['content']}" for m in st.session_state.messages[-6:]) +
               "\ncustomer: " + message)
-    result = client.models.generate_content(model="gemini-flash-latest", contents=prompt)
-    return result.text or "I could not generate a reply. Please try again.", item
+    result = client.models.generate_content(model=secret("GEMINI_MODEL") or "gemini-flash-latest", contents=prompt)
+    reply = result.text or "I could not generate a reply. Please try again."
+    reply = reply.replace("[link to menu]", "the Sample menu above")
+    return reply, item
 
 def event(kind, product=""):
     record = {"session_id": st.session_state.session_id, "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -127,15 +130,17 @@ if user := st.chat_input("What kind of drink would you like?"):
             event("recommendation", item["name"])
         st.rerun()
 if st.session_state.messages:
-    if st.button("View menu / CTA"):
+    if st.button("View full menu"):
         event("cta_click")
-        st.info("Demo CTA: in a real business, link this to the official menu or ordering page.")
+        st.dataframe(PRODUCTS, hide_index=True)
     if st.button("I would consider buying"):
         event("purchase_intent")
         st.success("Thanks! This records stated intent, not an actual purchase.")
 with st.sidebar:
     st.subheader("Classroom analytics")
     st.write("Mode:", "Gemini AI" if secret("GEMINI_API_KEY") else "Demo rules")
+    if secret("GEMINI_API_KEY"):
+        st.write("Model:", secret("GEMINI_MODEL") or "gemini-flash-latest")
     st.write("A/B variant:", st.session_state.variant)
     st.write("Events this browser session:", len(st.session_state.events))
     data = io.StringIO()
