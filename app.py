@@ -53,19 +53,34 @@ def answer(message):
     result = client.models.generate_content(model=secret("GEMINI_MODEL") or "gemini-flash-latest", contents=prompt)
     reply = result.text or "I could not generate a reply. Please try again."
     reply = reply.replace("[link to menu]", "the Sample menu above")
-    return reply, item
+    # Count a recommendation only when the reply actually names a catalog item.
+    named_item = next((p for p in PRODUCTS if p["name"].lower() in reply.lower()), None)
+    return reply, named_item
+
+def cloud_insert(table, record):
+    url, key = secret("SUPABASE_URL"), secret("SUPABASE_PUBLISHABLE_KEY")
+    if url and key:
+        try:
+            from supabase import create_client
+            create_client(url, key).table(table).insert(record, returning="minimal").execute()
+        except Exception:
+            st.warning("Cloud logging is unavailable. Please tell the instructor; this visit may not appear in the combined export.")
+
+def log_message(role, content):
+    st.session_state.message_index += 1
+    record = {"session_id": st.session_state.session_id,
+              "timestamp": datetime.now(timezone.utc).isoformat(),
+              "message_index": st.session_state.message_index,
+              "speaker": role,
+              "message": content[:3000],
+              "variant": st.session_state.variant}
+    cloud_insert("chatbot_messages", record)
 
 def event(kind, product=""):
     record = {"session_id": st.session_state.session_id, "timestamp": datetime.now(timezone.utc).isoformat(),
               "event": kind, "product": product, "variant": st.session_state.variant}
     st.session_state.events.append(record)
-    url, key = secret("SUPABASE_URL"), secret("SUPABASE_PUBLISHABLE_KEY")
-    if url and key:
-        try:
-            from supabase import create_client
-            create_client(url, key).table("chatbot_events").insert(record).execute()
-        except Exception:
-            st.warning("Cloud event logging is unavailable; this session is still recorded locally.")
+    cloud_insert("chatbot_events", record)
 
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
@@ -75,10 +90,18 @@ if "session_id" not in st.session_state:
     st.session_state.last_error = ""
     st.session_state.cooldown_until = 0
     st.session_state.cooldown_code = None
-    event("session_start")
+    st.session_state.started = False
+    st.session_state.consent = False
+    st.session_state.message_index = 0
 
 st.title("☕ Mack Coffee Assistant")
 st.caption("Classroom demonstration: no real orders are placed. Please do not enter personal information.")
+st.checkbox("I agree to have my messages and the bot's replies recorded for a classroom research exercise. Please do not enter names, contact details, or other personal information.", key="consent")
+if st.session_state.consent and not st.session_state.started:
+    st.session_state.started = True
+    event("session_start")
+if not st.session_state.consent:
+    st.info("Check the box above to start chatting. Your messages and the bot's replies will be stored for the instructor's classroom analysis.")
 st.write("Find a drink from our sample menu. Try: ‘low caffeine and creamy’ or ‘under $4’." if st.session_state.variant == "A" else "Hello! Tell me what kind of drink would brighten your day. I can help you explore our sample menu.")
 with st.expander("Sample menu"):
     st.dataframe(PRODUCTS, hide_index=True)
@@ -87,11 +110,12 @@ if st.session_state.get("last_error"):
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"].replace("$", r"\$"))
-if user := st.chat_input("What kind of drink would you like?"):
+if user := st.chat_input("What kind of drink would you like?", disabled=not st.session_state.consent):
     if len(user) > 500:
         st.warning("Please use 500 characters or fewer.")
     else:
         st.session_state.messages.append({"role": "user", "content": user})
+        log_message("visitor", user)
         event("message")  # Never store raw message text in the analytics table.
         st.session_state.last_error = ""
         try:
@@ -126,10 +150,11 @@ if user := st.chat_input("What kind of drink would you like?"):
                 st.session_state.last_error = f"Gemini request failed ({kind}" + (f", status {code}" if code else "") + f"). {reason}"
                 reply, item = "I could not reach Gemini just now. Please try again after checking the error above.", None
         st.session_state.messages.append({"role": "assistant", "content": reply})
+        log_message("bot", reply)
         if item:
             event("recommendation", item["name"])
         st.rerun()
-if st.session_state.messages:
+if st.session_state.messages and st.session_state.consent:
     if st.button("View full menu"):
         event("cta_click")
         st.dataframe(PRODUCTS, hide_index=True)
