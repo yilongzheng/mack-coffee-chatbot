@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import streamlit as st
 
 st.set_page_config(page_title="Mack Coffee Assistant", page_icon="☕")
+EXPERIMENT_ID = "tone_v2"
 PRODUCTS = list(csv.DictReader((Path(__file__).parent / "products.csv").open(encoding="utf-8")))
 
 def secret(name):
@@ -22,12 +23,12 @@ def balanced_variant(session_id):
         try:
             from supabase import create_client
             selected = create_client(url, key).rpc(
-                "assign_chatbot_variant", {"p_session_id": session_id}
+                "assign_chatbot_tone_variant", {"p_session_id": session_id}
             ).execute().data
             if selected in ("A", "B"):
                 return selected
         except Exception:
-            st.warning("Balanced A/B assignment is unavailable. Check that balance_variants.sql ran successfully.")
+            st.warning("Balanced tone assignment is unavailable. Check that tone_experiment_migration.sql ran successfully.")
     # Local mode still uses random assignment; small samples may be imbalanced.
     return "A" if uuid.uuid4().int % 2 == 0 else "B"
 
@@ -58,7 +59,11 @@ def answer(message):
         return f"Demo recommendation: {item['name']} (${item['price']}). {item['description']}. Would you like to see the menu?", item
     from google import genai
     client = genai.Client(api_key=key)
-    prompt = ("You are a concise, friendly Mack Coffee sales assistant. Reply in the customer's language. "
+    tone = ("Use a concise, professional, task-focused tone. Ask direct questions. "
+            if st.session_state.variant == "A" else
+            "Use a warm, personable, encouraging tone. Acknowledge the customer's preferences. ")
+    prompt = ("You are Mack Coffee's sales assistant. Reply in the customer's language. "
+              + tone + "In either style, keep replies to one to three short sentences and do not use emojis. "
               "Recommend only listed products and exact listed prices; do not invent discounts, dietary guarantees or stock. "
               "If preferences are unclear, ask one short clarifying question. No more than three questions before a recommendation. "
               "For a menu CTA, tell the customer to open Sample menu above or click View full menu below. "
@@ -88,12 +93,12 @@ def log_message(role, content):
               "message_index": st.session_state.message_index,
               "speaker": role,
               "message": content[:3000],
-              "variant": st.session_state.variant}
+              "variant": st.session_state.variant, "experiment_id": EXPERIMENT_ID}
     cloud_insert("chatbot_messages", record)
 
 def event(kind, product=""):
     record = {"session_id": st.session_state.session_id, "timestamp": datetime.now(timezone.utc).isoformat(),
-              "event": kind, "product": product, "variant": st.session_state.variant}
+              "event": kind, "product": product, "variant": st.session_state.variant, "experiment_id": EXPERIMENT_ID}
     st.session_state.events.append(record)
     cloud_insert("chatbot_events", record)
 
@@ -118,7 +123,8 @@ if st.session_state.consent and not st.session_state.started:
     event("session_start")
 if not st.session_state.consent:
     st.info("Check the box above to start chatting. Your messages and the bot's replies will be stored for the instructor's classroom analysis.")
-st.write("Find a drink from our sample menu. Try: ‘low caffeine and creamy’ or ‘under $4’." if st.session_state.variant == "A" else "Hello! Tell me what kind of drink would brighten your day. I can help you explore our sample menu.")
+if st.session_state.consent:
+    st.write("Find a drink from our sample menu. Try: ‘low caffeine and creamy’ or ‘under $4’." if st.session_state.variant == "A" else "Hello! Tell me what kind of drink would brighten your day. I can help you explore our sample menu.")
 with st.expander("Sample menu"):
     st.dataframe(PRODUCTS, hide_index=True)
 if st.session_state.get("last_error"):
@@ -183,8 +189,9 @@ with st.sidebar:
     if secret("GEMINI_API_KEY"):
         st.write("Model:", secret("GEMINI_MODEL") or "gemini-flash-latest")
     st.write("A/B variant:", st.session_state.variant)
+    st.write("Experiment:", EXPERIMENT_ID)
     st.write("Events this browser session:", len(st.session_state.events))
     data = io.StringIO()
-    writer = csv.DictWriter(data, fieldnames=["session_id", "timestamp", "event", "product", "variant"])
+    writer = csv.DictWriter(data, fieldnames=["session_id", "timestamp", "event", "product", "variant", "experiment_id"])
     writer.writeheader(); writer.writerows(st.session_state.events)
     st.download_button("Download session events CSV", data.getvalue(), "mack_events.csv", "text/csv")
