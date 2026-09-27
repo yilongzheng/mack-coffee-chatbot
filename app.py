@@ -80,7 +80,7 @@ if st.session_state.get("last_error"):
     st.error(st.session_state.last_error)
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
-        st.write(m["content"])
+        st.markdown(m["content"].replace("$", r"\$"))
 if user := st.chat_input("What kind of drink would you like?"):
     if len(user) > 500:
         st.warning("Please use 500 characters or fewer.")
