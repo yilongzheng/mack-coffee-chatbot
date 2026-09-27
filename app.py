@@ -71,6 +71,7 @@ if "session_id" not in st.session_state:
     st.session_state.variant = "A" if uuid.uuid4().int % 2 == 0 else "B"
     st.session_state.last_error = ""
     st.session_state.cooldown_until = 0
+    st.session_state.cooldown_code = None
     event("session_start")
 
 st.title("☕ Mack Coffee Assistant")
@@ -79,7 +80,7 @@ st.write("Find a drink from our sample menu. Try: ‘low caffeine and creamy’ 
 with st.expander("Sample menu"):
     st.dataframe(PRODUCTS, hide_index=True)
 if st.session_state.get("last_error"):
-    st.error(st.session_state.last_error)
+    st.warning(st.session_state.last_error)
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"].replace("$", r"\$"))
@@ -92,8 +93,9 @@ if user := st.chat_input("What kind of drink would you like?"):
         st.session_state.last_error = ""
         try:
             if secret("GEMINI_API_KEY") and time.time() < st.session_state.get("cooldown_until", 0):
-                item = choose(user)
-                reply = f"AI is temporarily at its usage limit. Rule-based demo suggestion: {item['name']} (${item['price']}). {item['description']}."
+                code = st.session_state.get("cooldown_code")
+                st.session_state.last_error = f"Service notice ({code}): Our chat assistant is temporarily unavailable."
+                reply, item = "We're experiencing higher than normal demand right now. Please try again in a little while. Thank you for your understanding, coffee warriors!", None
             else:
                 reply, item = answer(user)
         except Exception as exc:
@@ -112,11 +114,11 @@ if user := st.chat_input("What kind of drink would you like?"):
                 reason = "Gemini rejected this request. Check model access and configuration."
             else:
                 reason = "Check your internet connection, model availability, and Python environment."
-            if code == 429:
+            if code in (429, 503):
                 st.session_state.cooldown_until = time.time() + 60
-                st.session_state.last_error = "Gemini usage limit reached (429). This session is using rule-based demo suggestions for at least one minute. Check AI Studio usage to see whether the limit is short-term or daily."
-                item = choose(user)
-                reply = f"AI is temporarily at its usage limit. Rule-based demo suggestion: {item['name']} (${item['price']}). {item['description']}."
+                st.session_state.cooldown_code = code
+                st.session_state.last_error = f"Service notice ({code}): Our chat assistant is temporarily unavailable."
+                reply, item = "We're experiencing higher than normal demand right now. Please try again in a little while. Thank you for your understanding, coffee warriors!", None
             else:
                 st.session_state.last_error = f"Gemini request failed ({kind}" + (f", status {code}" if code else "") + f"). {reason}"
                 reply, item = "I could not reach Gemini just now. Please try again after checking the error above.", None
