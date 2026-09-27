@@ -1,6 +1,7 @@
 """Mack Coffee: classroom marketing chatbot, demo or Gemini mode."""
 import csv
 import io
+import time
 import uuid
 from pathlib import Path
 from datetime import datetime, timezone
@@ -69,6 +70,7 @@ if "session_id" not in st.session_state:
     st.session_state.events = []
     st.session_state.variant = "A" if uuid.uuid4().int % 2 == 0 else "B"
     st.session_state.last_error = ""
+    st.session_state.cooldown_until = 0
     event("session_start")
 
 st.title("☕ Mack Coffee Assistant")
@@ -89,7 +91,11 @@ if user := st.chat_input("What kind of drink would you like?"):
         event("message")  # Never store raw message text in the analytics table.
         st.session_state.last_error = ""
         try:
-            reply, item = answer(user)
+            if secret("GEMINI_API_KEY") and time.time() < st.session_state.get("cooldown_until", 0):
+                item = choose(user)
+                reply = f"AI is temporarily at its usage limit. Rule-based demo suggestion: {item['name']} (${item['price']}). {item['description']}."
+            else:
+                reply, item = answer(user)
         except Exception as exc:
             # Show a safe diagnostic without printing the API key or raw request.
             code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
@@ -106,8 +112,14 @@ if user := st.chat_input("What kind of drink would you like?"):
                 reason = "Gemini rejected this request. Check model access and configuration."
             else:
                 reason = "Check your internet connection, model availability, and Python environment."
-            st.session_state.last_error = f"Gemini request failed ({kind}" + (f", status {code}" if code else "") + f"). {reason}"
-            reply, item = "I could not reach Gemini just now. Please try again after checking the error above.", None
+            if code == 429:
+                st.session_state.cooldown_until = time.time() + 60
+                st.session_state.last_error = "Gemini usage limit reached (429). This session is using rule-based demo suggestions for at least one minute. Check AI Studio usage to see whether the limit is short-term or daily."
+                item = choose(user)
+                reply = f"AI is temporarily at its usage limit. Rule-based demo suggestion: {item['name']} (${item['price']}). {item['description']}."
+            else:
+                st.session_state.last_error = f"Gemini request failed ({kind}" + (f", status {code}" if code else "") + f"). {reason}"
+                reply, item = "I could not reach Gemini just now. Please try again after checking the error above.", None
         st.session_state.messages.append({"role": "assistant", "content": reply})
         if item:
             event("recommendation", item["name"])
